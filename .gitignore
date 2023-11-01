@@ -1,5 +1,5 @@
 # custom gitignore rules
-
+.vscode
 assignments/rapper_files
 web-scraper-marvel-wiki/tutorial/wikipages
 
