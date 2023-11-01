@@ -1,6 +1,7 @@
 # custom gitignore rules
 
 assignments/rapper_files
+web-scraper-marvel-wiki/tutorial/wikipages
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
