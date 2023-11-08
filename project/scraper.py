@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.asyncio import tqdm
 import aiohttp  # requires cchardet package
+import asyncio
 
 
 ## Util functions ##
@@ -136,11 +137,49 @@ async def send_urlib_request_async(query, response_handler=None, query_continue_
 
     return results
 
-async def handle_queries(queries, response_handler=None, query_continue_param=None, tqdm_desc=None):
-    coroutines = [send_urlib_request_async(query, response_handler, query_continue_param) for query in queries]
-    wikitexts = await tqdm.gather(*coroutines, desc=tqdm_desc)
+async def urlib_request_worker(queue, session, results_p, pbar, response_handler=None, query_continue_param=None):
+    # Worker for processing multiple queries
+    while True:
+        query = await queue.get()
+        results_p.append(await send_urlib_request_async(query, response_handler, query_continue_param))
+        pbar.update(1)
+        queue.task_done()
 
-    return wikitexts
+async def handle_queries(queries, response_handler=None, query_continue_param=None, tqdm_desc=None):
+    #
+    N_MAX_WORKERS = 2000
+
+    if len(queries) <= N_MAX_WORKERS:
+        coroutines = [send_urlib_request_async(query, response_handler, query_continue_param) for query in queries]
+        wikitexts = await tqdm.gather(*coroutines, desc=tqdm_desc)
+
+        return wikitexts
+    else:
+        N_WORKERS = 50
+        queue = asyncio.Queue()
+        results_p = []
+
+        async def async_generator():
+            for i in queries:
+                yield i
+
+        async with aiohttp.ClientSession() as session:
+
+            pbar = tqdm(total=len(queries), desc=tqdm_desc, mininterval=0.2)
+
+            workers = [asyncio.create_task(urlib_request_worker(queue, session, results_p, pbar, response_handler, query_continue_param)) for _ in range(N_WORKERS)]
+            
+            async for query in async_generator():
+                await queue.put(query)
+            
+            # Wait for tasks to finish
+            await queue.join()
+
+        # Finished
+        for worker in workers:
+            worker.cancel()
+
+        return results_p
 
 # Parser
 
@@ -196,7 +235,6 @@ async def scrape_wiki(category_titles, verbose=True):
     wiki_api_page_request_limit = 50
     namespace_id_talk = 1
 
-
     ## Talk: pages
     # Get pages in category
     category_queries = [get_category_pages_query(category_title, namespace_id_talk) for category_title in category_titles]
@@ -221,11 +259,11 @@ async def scrape_wiki(category_titles, verbose=True):
     # Get wiki Talk: pages
     wiki_page_queries = [get_wiki_data_query(titles) for titles in split_talk_titles_list]
     # Send requests
-    talk_pages = await handle_queries(wiki_page_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(all_titles)) + " pages")
+    talk_pages = await handle_queries(wiki_page_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(all_titles)) + " talk pages")
 
     # Parse Talk: pages
     talk_data = []
-    for sublist in tqdm(talk_pages, desc="Parsing page batches"): # TODO parallelize if possible
+    for sublist in tqdm(talk_pages, desc="Parsing talk page batches", mininterval=0.5):
         parse_results = [parse_talk_page(page_content) for key, page_content in sublist.items()]
         talk_data += parse_results
 
@@ -240,7 +278,7 @@ async def scrape_wiki(category_titles, verbose=True):
 
     # Parse Talk: pages
     wiki_data = []
-    for sublist in tqdm(wiki_pages, desc="Parsing page batches"): # TODO parallelize if possible
+    for sublist in tqdm(wiki_pages, desc="Parsing wiki page batches", mininterval=0.5):
         parse_results = [parse_wiki_page(page_content) for key, page_content in sublist.items()]
         wiki_data += parse_results
 
