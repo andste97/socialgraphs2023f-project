@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 from tqdm.asyncio import tqdm
 import aiohttp  # requires cchardet package
 import asyncio
+import os
+import errno
 
 
 ## Util functions ##
@@ -228,6 +230,24 @@ def parse_wiki_page(page):
     else:
         return None
 
+def archive_page(page):
+    if "revisions" in page:
+        content = page["revisions"][0]["slots"]["main"]["*"]  # * from rvslots
+        title = page["title"]
+
+        filename = "./page_contents/" + title +".txt"
+
+         # create directories if they do not exist
+        if not os.path.exists(os.path.dirname(filename)):
+            try:
+                os.makedirs(os.path.dirname(filename))
+            except OSError as exc: # Guard against race condition
+                if exc.errno != errno.EEXIST:
+                    raise
+
+        with open(filename, "+w") as file:
+            file.write(content)
+
 # Scraper
 
 async def scrape_wiki(category_titles, verbose=True):
@@ -260,6 +280,9 @@ async def scrape_wiki(category_titles, verbose=True):
     wiki_page_queries = [get_wiki_data_query(titles) for titles in split_talk_titles_list]
     # Send requests
     talk_pages = await handle_queries(wiki_page_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(all_titles)) + " talk pages")
+
+    for sublist in tqdm(talk_pages, desc="Writing talk page batches to disk", mininterval=0.5):
+        [archive_page(page_content) for _, page_content in sublist.items()]
 
     # Parse Talk: pages
     talk_data = []
