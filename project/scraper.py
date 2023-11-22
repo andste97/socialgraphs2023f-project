@@ -373,6 +373,14 @@ async def scrape_wiki(category_titles, verbose=True):
         parse_results = [parse_talk_page(page_content) for key, page_content in sublist.items()]
         talk_data += parse_results
 
+    ##########
+
+    # Save talk page Data
+    for sublist in tqdm(talk_pages, desc="Writing talk page batches to disk", mininterval=0.5):
+        [save_page(page_content) for _, page_content in sublist.items()]
+
+    ##########
+
     ## Article pages
     wiki_page_titles = [title.replace("Talk:", "") for title in talk_titles]
     # Split list because of API limits
@@ -408,14 +416,6 @@ async def scrape_wiki(category_titles, verbose=True):
     users = await handle_queries(user_edit_queries, response_handler=handle_user_edits_return, tqdm_desc="Fetching " + str(len(users_unique)) + " user edits")
     # Count edits for users
     user_edit_counts = {user["editcount"] if "editcount" in user else 0 for user in users}
-
-    ##########
-
-    # Save talk page Data
-    for sublist in tqdm(talk_pages, desc="Writing talk page batches to disk", mininterval=0.5):
-        [save_page(page_content) for _, page_content in sublist.items()]
-
-    ##########
 
     # Graph
     page_graph = nx.DiGraph()
