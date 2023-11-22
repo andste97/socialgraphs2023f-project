@@ -10,6 +10,7 @@ import aiohttp  # requires cchardet package
 import asyncio
 import os
 import errno
+from collections import ChainMap, Counter
 
 
 ## Util functions ##
@@ -30,24 +31,26 @@ def get_category_pages_query(title, namespace_id=0):
     baseurl = "https://en.wikipedia.org/w/api.php?"
     action = "action=query"
     content = "list=categorymembers"
-    dataformat ="format=json&cmlimit=500"
+    dataformat = "format=json&cmlimit=500"
     safe_title = "cmtitle=" + urllib.parse.quote_plus(title)
     cmnamespace = "cmnamespace=" + str(namespace_id)
 
     query = "{}{}&{}&{}&{}&{}".format(baseurl, action, content, safe_title, cmnamespace, dataformat)
 
-    return query
+    query_info = {"query": query, "name": None}
+
+    return query_info
 
 def handle_category_pages_return(wikitext_json):
 
     categories_list = wikitext_json["query"]["categorymembers"]
 
     if "continue" in wikitext_json:
-        contin = wikitext_json["continue"]["cmcontinue"]
+        contin = "&cmcontinue=" +  wikitext_json["continue"]["cmcontinue"]
     else:
         contin = None
 
-    return contin, categories_list
+    return categories_list, contin
 
 # Title search
 
@@ -55,13 +58,15 @@ def get_wiki_pages_with_prefix_query(prefix, namespace_id=0):
     baseurl = "https://en.wikipedia.org/w/api.php?"
     action = "action=query"
     content = "list=allpages"
-    dataformat ="format=json&aplimit=500"
+    dataformat = "format=json&aplimit=500"
     apprefix = "apprefix=" + urllib.parse.quote_plus(prefix)
     apnamespace = "apnamespace=" + str(namespace_id)
 
     query = "{}{}&{}&{}&{}&{}".format(baseurl, action, content, apprefix, apnamespace, dataformat)
 
-    return query
+    query_info = {"query": query, "name": None}
+
+    return query_info
 
 def handle_wiki_pages_with_prefix_return(wikitext_json):
 
@@ -72,12 +77,12 @@ def handle_wiki_pages_with_prefix_return(wikitext_json):
     else:
         title_list = []
 
-    return None, title_list
+    return title_list, None
 
 # Wiki pages
 
 def get_wiki_data_query(titles):
-    # Can handle multiple titles
+    # Can handle up to 50 titles
     if isinstance(titles, list):
         titlestring = "|".join(titles)
     else:
@@ -86,17 +91,71 @@ def get_wiki_data_query(titles):
     baseurl = "https://en.wikipedia.org/w/api.php?"
     action = "action=query"
     content = "prop=revisions&rvprop=content&rvslots=*"
-    dataformat ="format=json"
+    dataformat = "format=json"
     safe_title = "titles=" + urllib.parse.quote_plus(titlestring)
     query = "{}{}&{}&{}&{}".format(baseurl, action, content, safe_title, dataformat)
 
-    return query
+    query_info = {"query": query, "name": None}
+
+    return query_info
 
 def handle_wiki_data_return(wikitext_json):
 
     pages = wikitext_json["query"]["pages"]
 
-    return None, pages
+    return pages, None
+
+# Wiki page revisions
+
+def get_wiki_page_revisions_query(title):
+
+    baseurl = "https://en.wikipedia.org/w/api.php?"
+    action = "action=query"
+    content = "prop=revisions&rvprop=timestamp|user|comment|size&rvslots=*&rvlimit=500"
+    dataformat = "format=json"
+    safe_title = "titles=" + urllib.parse.quote_plus(title)
+    query = "{}{}&{}&{}&{}".format(baseurl, action, content, safe_title, dataformat)
+
+    query_info = {"query": query, "name": title}
+
+    return query_info
+
+def handle_wiki_page_revisions_return(wikitext_json):
+
+    revisions = wikitext_json["query"]["pages"][next(iter(wikitext_json["query"]["pages"]))]["revisions"]
+
+    if "continue" in wikitext_json:
+        contin = "&rvcontinue=" + wikitext_json["continue"]["rvcontinue"]
+    else:
+        contin = None
+
+    return revisions, contin
+
+# User edits
+
+def get_user_edits_query(users):
+    # Can handle up to 50 users
+    if isinstance(users, list):
+        userstring = "|".join([str(user) for user in users])
+    else:
+        userstring = users
+
+    baseurl = "https://en.wikipedia.org/w/api.php?"
+    action = "action=query"
+    content = "list=users&usprop=editcount"
+    dataformat = "format=json"
+    safe_user = "ususers=" + urllib.parse.quote_plus(str(userstring))
+    query = "{}{}&{}&{}&{}".format(baseurl, action, content, safe_user, dataformat)
+
+    query_info = {"query": query, "name": None}
+
+    return query_info
+
+def handle_user_edits_return(wikitext_json):
+
+    users = wikitext_json["query"]["users"]
+
+    return users, None
 
 # HTTP Request handling
 
@@ -108,16 +167,21 @@ def send_urlib_request_sync(query):
 
     return wikitext_json
 
-async def send_urlib_request_async(query, response_handler=None, query_continue_param=None):
+async def send_urlib_request_async(query_info, response_handler):
     # response_handler callback functions should return a continue indicator as first argument, which will trigger another query if it is not None, and the actual return as a second argument.
     # Will return a list of results if query_continue_param is provided, otherwise just the response.
 
     results = []
-    contin = "initial_run"
+    request_count = 0
+    contin = None
 
-    while contin is not None:
-        if contin != "initial_run" and query_continue_param is not None:
-            curr_query = query + query_continue_param + contin
+    query = query_info["query"]
+
+    while contin is not None or request_count == 0:
+        request_count += 1
+
+        if contin is not None:
+            curr_query = query + contin
         else:
             curr_query = query
 
@@ -126,33 +190,42 @@ async def send_urlib_request_async(query, response_handler=None, query_continue_
                 html = await response.text()
                 wikitext_json = json.loads(html)
 
-                if response_handler is None:
-                    results = wikitext_json
-                    contin = None
+                curr_results, contin = response_handler(wikitext_json)
+
+                if request_count == 1:
+                    results = curr_results
                 else:
-                    contin, curr_results = response_handler(wikitext_json)
-                    if query_continue_param is not None:
-                        results += curr_results
+                    if type(curr_results) is list:
+                        results.extend(curr_results)
+                    elif type(curr_results) is dict:
+                        results |= (curr_results)
                     else:
-                        results = curr_results
-                        contin = None # prevent loops
+                        print("Can't handle type " + str(type(curr_results)))
+    
+    # Get rid of outer list if only one request was made
+    #if request_count == 1:
+    #    results = results[0]
+
+    # Option to turn unnamed list into dict in case of undistinguishable information, configure in query generator
+    if query_info["name"] is not None:
+        results = {query_info["name"]: results}
 
     return results
 
-async def urlib_request_worker(queue, session, results_p, pbar, response_handler=None, query_continue_param=None):
+async def urlib_request_worker(queue, session, results_p, pbar, response_handler):
     # Worker for processing multiple queries
     while True:
-        query = await queue.get()
-        results_p.append(await send_urlib_request_async(query, response_handler, query_continue_param))
+        query_info = await queue.get()
+        results_p.append(await send_urlib_request_async(query_info, response_handler))
         pbar.update(1)
         queue.task_done()
 
-async def handle_queries(queries, response_handler=None, query_continue_param=None, tqdm_desc=None):
-    #
+async def handle_queries(queries, response_handler, tqdm_desc=None):
+
     N_MAX_WORKERS = 2000
 
     if len(queries) <= N_MAX_WORKERS:
-        coroutines = [send_urlib_request_async(query, response_handler, query_continue_param) for query in queries]
+        coroutines = [send_urlib_request_async(query_info, response_handler) for query_info in queries]
         wikitexts = await tqdm.gather(*coroutines, desc=tqdm_desc)
 
         return wikitexts
@@ -161,7 +234,7 @@ async def handle_queries(queries, response_handler=None, query_continue_param=No
         queue = asyncio.Queue()
         results_p = []
 
-        async def async_generator():
+        async def async_query_generator():
             for i in queries:
                 yield i
 
@@ -169,10 +242,10 @@ async def handle_queries(queries, response_handler=None, query_continue_param=No
 
             pbar = tqdm(total=len(queries), desc=tqdm_desc, mininterval=0.2)
 
-            workers = [asyncio.create_task(urlib_request_worker(queue, session, results_p, pbar, response_handler, query_continue_param)) for _ in range(N_WORKERS)]
+            workers = [asyncio.create_task(urlib_request_worker(queue, session, results_p, pbar, response_handler)) for _ in range(N_WORKERS)]
             
-            async for query in async_generator():
-                await queue.put(query)
+            async for query_info in async_query_generator():
+                await queue.put(query_info)
             
             # Wait for tasks to finish
             await queue.join()
@@ -216,6 +289,7 @@ def parse_talk_page(page):
     else:
         return None
 
+# This is mostly stub
 def parse_wiki_page(page):
 
     # Does page exist?
@@ -230,7 +304,19 @@ def parse_wiki_page(page):
     else:
         return None
 
-def archive_page(page):
+
+def parse_page_revisions(revision_list):
+
+    #reverts = {k: [edit for edit in v if "comment" in edit and "revert" in edit["comment"].lower()] for k, v in infos["revision_dict"].items()}
+
+    # count user edits
+    #dict(Counter([revision["user"] for revision in revision_list if "user" in revision]))
+
+    return {"edit_war_score": 0}
+
+# Save pages to disk
+
+def save_page(page):
     if "revisions" in page:
         content = page["revisions"][0]["slots"]["main"]["*"]  # * from rvslots
         title = page["title"]
@@ -259,7 +345,7 @@ async def scrape_wiki(category_titles, verbose=True):
     # Get pages in category
     category_queries = [get_category_pages_query(category_title, namespace_id_talk) for category_title in category_titles]
     # Send requests
-    pages = await handle_queries(category_queries, response_handler=handle_category_pages_return, query_continue_param="&cmcontinue=", tqdm_desc="Fetching " + str(len(category_titles)) + " categories")
+    pages = await handle_queries(category_queries, response_handler=handle_category_pages_return, tqdm_desc="Fetching " + str(len(category_titles)) + " categories")
     # Handle results
     talk_titles = [r["title"] for page in pages for r in page]
     
@@ -281,9 +367,6 @@ async def scrape_wiki(category_titles, verbose=True):
     # Send requests
     talk_pages = await handle_queries(wiki_page_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(all_titles)) + " talk pages")
 
-    for sublist in tqdm(talk_pages, desc="Writing talk page batches to disk", mininterval=0.5):
-        [archive_page(page_content) for _, page_content in sublist.items()]
-
     # Parse Talk: pages
     talk_data = []
     for sublist in tqdm(talk_pages, desc="Parsing talk page batches", mininterval=0.5):
@@ -299,11 +382,40 @@ async def scrape_wiki(category_titles, verbose=True):
     # Send requests
     wiki_pages = await handle_queries(wiki_page_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(wiki_page_titles)) + " wiki pages")
 
-    # Parse Talk: pages
+    # Parse wiki pages
     wiki_data = []
     for sublist in tqdm(wiki_pages, desc="Parsing wiki page batches", mininterval=0.5):
         parse_results = [parse_wiki_page(page_content) for key, page_content in sublist.items()]
         wiki_data += parse_results
+
+    ## Revisions
+    # Get revisions
+    revision_queries = [get_wiki_page_revisions_query(title) for title in wiki_page_titles]
+    # Send requests
+    revisions = await handle_queries(revision_queries, response_handler=handle_wiki_page_revisions_return, tqdm_desc="Fetching " + str(len(wiki_page_titles)) + " revisions")
+    # Merge list of dicts into one dict
+    revision_dict = dict(ChainMap(*revisions))
+    # Extract users
+    user_list = [revision["user"] for page_title, page_revisions in revision_dict.items() for revision in page_revisions if "user" in revision]
+    user_list.extend([link for page_data in talk_data for link in page_data["user_links"]])
+    users_unique = np.unique(user_list)
+
+    ## Users
+    split_user_list = list(chunks(users_unique, wiki_api_page_request_limit))
+    # Get revisions
+    user_edit_queries = [get_user_edits_query(users) for users in split_user_list]
+    # Send requests
+    users = await handle_queries(user_edit_queries, response_handler=handle_user_edits_return, tqdm_desc="Fetching " + str(len(users_unique)) + " user edits")
+    # Count edits for users
+    user_edit_counts = {user["editcount"] if "editcount" in user else 0 for user in users}
+
+    ##########
+
+    # Save Data
+    #for sublist in tqdm(talk_pages, desc="Writing talk page batches to disk", mininterval=0.5):
+    #    [save_page(page_content) for _, page_content in sublist.items()]
+
+    ##########
 
     # Graph
     page_graph = nx.DiGraph()
@@ -329,6 +441,6 @@ async def scrape_wiki(category_titles, verbose=True):
 
     print("Total edges: " + str(count))
 
-    infos = {"titles": talk_titles, "archive_titles": archive_titles }
+    infos = {"titles": talk_titles, "archive_titles": archive_titles, "user_edit_counts": user_edit_counts, "revision_dict": revision_dict}
 
     return page_graph, infos
