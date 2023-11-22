@@ -185,26 +185,30 @@ async def send_urlib_request_async(query_info, response_handler):
         else:
             curr_query = query
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(curr_query) as response:
-                html = await response.text()
-                wikitext_json = json.loads(html)
+        try:
+            async with asyncio.timeout(30):
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(curr_query) as response:
+                        try:
+                            html = await response.text()
 
-                curr_results, contin = response_handler(wikitext_json)
+                            wikitext_json = json.loads(html)
 
-                if request_count == 1:
-                    results = curr_results
-                else:
-                    if type(curr_results) is list:
-                        results.extend(curr_results)
-                    elif type(curr_results) is dict:
-                        results |= (curr_results)
-                    else:
-                        print("Can't handle type " + str(type(curr_results)))
-    
-    # Get rid of outer list if only one request was made
-    #if request_count == 1:
-    #    results = results[0]
+                            curr_results, contin = response_handler(wikitext_json)
+
+                            if request_count == 1:
+                                results = curr_results
+                            else:
+                                if type(curr_results) is list:
+                                    results.extend(curr_results)
+                                elif type(curr_results) is dict:
+                                    results |= (curr_results)
+                                else:
+                                    print("Can't handle type " + str(type(curr_results)))
+                        except:
+                            error = 0 # stub
+        except TimeoutError:
+            print("HTTP request timed out")
 
     # Option to turn unnamed list into dict in case of undistinguishable information, configure in query generator
     if query_info["name"] is not None:
@@ -290,7 +294,7 @@ def parse_talk_page(page):
         return None
 
 # This is mostly stub
-def parse_wiki_page(page):
+def parse_article_page(page):
 
     # Does page exist?
     if "revisions" in page:
@@ -361,38 +365,35 @@ async def scrape_wiki(category_titles, verbose=True):
     all_titles = talk_titles + archive_titles
     # Split list because of API limits
     split_talk_titles_list = list(chunks(all_titles, wiki_api_page_request_limit))
-
     # Get wiki Talk: pages
     wiki_page_queries = [get_wiki_data_query(titles) for titles in split_talk_titles_list]
     # Send requests
     talk_pages = await handle_queries(wiki_page_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(all_titles)) + " talk pages")
-
     # Parse Talk: pages
     talk_data = []
     for sublist in tqdm(talk_pages, desc="Parsing talk page batches", mininterval=0.5):
-        parse_results = [parse_talk_page(page_content) for key, page_content in sublist.items()]
+        parse_results = [parse_talk_page(page_content) for key, page_content in sublist.items() if type(sublist) == dict]
         talk_data += parse_results
 
-    ## Main pages
-    wiki_page_titles = [title.replace("Talk:", "") for title in talk_titles]
+    ## Article pages
+    article_page_titles = [title.replace("Talk:", "") for title in talk_titles]
     # Split list because of API limits
-    split_wiki_titles_list = list(chunks(wiki_page_titles, wiki_api_page_request_limit))
+    split_article_titles_list = list(chunks(article_page_titles, wiki_api_page_request_limit))
     # Get wiki Talk: pages
-    wiki_page_queries = [get_wiki_data_query(titles) for titles in split_wiki_titles_list]
+    wiki_page_queries = [get_wiki_data_query(titles) for titles in split_article_titles_list]
     # Send requests
-    wiki_pages = await handle_queries(wiki_page_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(wiki_page_titles)) + " wiki pages")
-
+    wiki_pages = await handle_queries(wiki_page_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(article_page_titles)) + " article pages")
     # Parse wiki pages
     wiki_data = []
-    for sublist in tqdm(wiki_pages, desc="Parsing wiki page batches", mininterval=0.5):
-        parse_results = [parse_wiki_page(page_content) for key, page_content in sublist.items()]
+    for sublist in tqdm(wiki_pages, desc="Parsing article page batches", mininterval=0.5):
+        parse_results = [parse_article_page(page_content) for key, page_content in sublist.items() if type(sublist) == dict]
         wiki_data += parse_results
 
     ## Revisions
     # Get revisions
-    revision_queries = [get_wiki_page_revisions_query(title) for title in wiki_page_titles]
+    revision_queries = [get_wiki_page_revisions_query(title) for title in article_page_titles]
     # Send requests
-    revisions = await handle_queries(revision_queries, response_handler=handle_wiki_page_revisions_return, tqdm_desc="Fetching " + str(len(wiki_page_titles)) + " revisions")
+    revisions = await handle_queries(revision_queries, response_handler=handle_wiki_page_revisions_return, tqdm_desc="Fetching " + str(len(article_page_titles)) + " revisions")
     # Merge list of dicts into one dict
     revision_dict = dict(ChainMap(*revisions))
     # Extract users
@@ -400,14 +401,15 @@ async def scrape_wiki(category_titles, verbose=True):
     user_list.extend([link for page_data in talk_data for link in page_data["user_links"]])
     users_unique = np.unique(user_list)
 
-    ## Users
-    split_user_list = list(chunks(users_unique, wiki_api_page_request_limit))
-    # Get revisions
-    user_edit_queries = [get_user_edits_query(users) for users in split_user_list]
-    # Send requests
-    users = await handle_queries(user_edit_queries, response_handler=handle_user_edits_return, tqdm_desc="Fetching " + str(len(users_unique)) + " user edits")
-    # Count edits for users
-    user_edit_counts = {user["editcount"] if "editcount" in user else 0 for user in users}
+    # ## Users
+    # split_user_list = list(chunks(users_unique, wiki_api_page_request_limit))
+    # # Get revisions
+    # user_edit_queries = [get_user_edits_query(users) for users in split_user_list]
+    # # Send requests
+    # users = await handle_queries(user_edit_queries, response_handler=handle_user_edits_return, tqdm_desc="Fetching " + str(len(users_unique)) + " user edits")
+    # # Count edits for users
+    # user_edit_counts = {user["editcount"] if "editcount" in user else 0 for user in users}
+    user_edit_counts = []
 
     ##########
 
@@ -420,7 +422,7 @@ async def scrape_wiki(category_titles, verbose=True):
     # Graph
     page_graph = nx.DiGraph()
 
-    for talk_page_title, wiki_page_title in zip(talk_titles, wiki_page_titles):
+    for talk_page_title, wiki_page_title in zip(talk_titles, article_page_titles):
         page_graph.add_node(talk_page_title, page_class="talk")
         page_graph.add_node(wiki_page_title, page_class="page")
         page_graph.add_edge(talk_page_title, wiki_page_title)
