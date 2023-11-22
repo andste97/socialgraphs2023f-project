@@ -373,7 +373,7 @@ async def scrape_wiki(category_titles, verbose=True):
         parse_results = [parse_talk_page(page_content) for key, page_content in sublist.items()]
         talk_data += parse_results
 
-    ## Main pages
+    ## Article pages
     wiki_page_titles = [title.replace("Talk:", "") for title in talk_titles]
     # Split list because of API limits
     split_wiki_titles_list = list(chunks(wiki_page_titles, wiki_api_page_request_limit))
@@ -411,9 +411,9 @@ async def scrape_wiki(category_titles, verbose=True):
 
     ##########
 
-    # Save Data
-    #for sublist in tqdm(talk_pages, desc="Writing talk page batches to disk", mininterval=0.5):
-    #    [save_page(page_content) for _, page_content in sublist.items()]
+    # Save talk page Data
+    for sublist in tqdm(talk_pages, desc="Writing talk page batches to disk", mininterval=0.5):
+        [save_page(page_content) for _, page_content in sublist.items()]
 
     ##########
 
