@@ -353,7 +353,7 @@ def get_plaintext_wiki_data_query(title):
 
 # Save pages to disk
 def write_file_to_folder(filepath, content):
-    filepath = filepath.replace("/", '-')
+    # filepath = filepath.replace("/", '-')
     # create directories if they do not exist
     if not os.path.exists(os.path.dirname(filepath)):
         try:
@@ -370,7 +370,7 @@ def save_talk_page(page):
         content = page["revisions"][0]["slots"]["main"]["*"]  # * from rvslots
         title = page["title"]
 
-        filepath = "./page_contents/" + title.replace("/", '-') +".txt"
+        filepath = "./page_contents/" + title +".txt"
         write_file_to_folder(filepath, content)
 
 def save_article_plaintext(page):
@@ -446,10 +446,10 @@ async def scrape_wiki(category_titles, verbose=True):
     
     # Parse and save plaintext wiki pages
     for sublist in tqdm(wiki_plaintext_pages, desc="Parsing and saving plaintext wiki page batches", mininterval=0.5):
-        print(sublist)
         [save_article_plaintext(page_content) for _,page_content in sublist.items()]
 
     ## Revisions
+    print("getting revisions")
     # Get revisions
     revision_queries = [get_wiki_page_revisions_query(title) for title in article_page_titles]
     # Send requests
@@ -472,6 +472,7 @@ async def scrape_wiki(category_titles, verbose=True):
     # user_edit_counts = {user["editcount"] if "editcount" in user else 0 for user in users}
 
     # Graph
+    print("creating graph")
     page_graph = nx.DiGraph()
 
     for talk_page_title, wiki_page_title in zip(talk_titles, article_page_titles):
