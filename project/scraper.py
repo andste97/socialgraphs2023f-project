@@ -366,9 +366,9 @@ async def scrape_wiki(category_titles, verbose=True):
     # Split list because of API limits
     split_talk_titles_list = list(chunks(all_titles, wiki_api_page_request_limit))
     # Get wiki Talk: pages
-    wiki_page_queries = [get_wiki_data_query(titles) for titles in split_talk_titles_list]
+    talk_page_queries = [get_wiki_data_query(titles) for titles in split_talk_titles_list]
     # Send requests
-    talk_pages = await handle_queries(wiki_page_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(all_titles)) + " talk pages")
+    talk_pages = await handle_queries(talk_page_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(all_titles)) + " talk pages")
     # Parse Talk: pages
     talk_data = []
     for sublist in tqdm(talk_pages, desc="Parsing talk page batches", mininterval=0.5):
@@ -388,14 +388,14 @@ async def scrape_wiki(category_titles, verbose=True):
     # Split list because of API limits
     split_article_titles_list = list(chunks(article_page_titles, wiki_api_page_request_limit))
     # Get wiki Talk: pages
-    wiki_page_queries = [get_wiki_data_query(titles) for titles in split_article_titles_list]
+    article_page_queries = [get_wiki_data_query(titles) for titles in split_article_titles_list]
     # Send requests
-    wiki_pages = await handle_queries(wiki_page_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(article_page_titles)) + " article pages")
+    article_pages = await handle_queries(article_page_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(article_page_titles)) + " article pages")
     # Parse wiki pages
-    wiki_data = []
-    for sublist in tqdm(wiki_pages, desc="Parsing article page batches", mininterval=0.5):
+    article_data = []
+    for sublist in tqdm(article_pages, desc="Parsing article page batches", mininterval=0.5):
         parse_results = [parse_article_page(page_content) for key, page_content in sublist.items() if type(sublist) == dict]
-        wiki_data += parse_results
+        article_data += parse_results
 
     ## Revisions
     # Get revisions
