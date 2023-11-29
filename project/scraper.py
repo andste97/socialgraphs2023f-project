@@ -453,7 +453,6 @@ async def scrape_wiki(category_titles, verbose=True):
         [save_article_plaintext(page_content) for _,page_content in sublist.items()]
 
     ## Revisions
-    print("getting revisions")
     # Get revisions
     revision_queries = [get_wiki_page_revisions_query(title) for title in article_page_titles]
     # Send requests
