@@ -185,30 +185,26 @@ async def send_urlib_request_async(query_info, response_handler):
         else:
             curr_query = query
 
-        try:
-            async with asyncio.timeout(30):
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(curr_query) as response:
-                        try:
-                            html = await response.text()
+        async with aiohttp.ClientSession(timeout=aiohttp. ClientTimeout(total=30)) as session:
+            async with session.get(curr_query) as response:
+                try:
+                    html = await response.text()
 
-                            wikitext_json = json.loads(html)
+                    wikitext_json = json.loads(html)
 
-                            curr_results, contin = response_handler(wikitext_json)
+                    curr_results, contin = response_handler(wikitext_json)
 
-                            if request_count == 1:
-                                results = curr_results
-                            else:
-                                if type(curr_results) is list:
-                                    results.extend(curr_results)
-                                elif type(curr_results) is dict:
-                                    results |= (curr_results)
-                                else:
-                                    print("Can't handle type " + str(type(curr_results)))
-                        except:
-                            error = 0 # stub
-        except TimeoutError:
-            print("HTTP request timed out")
+                    if request_count == 1:
+                        results = curr_results
+                    else:
+                        if type(curr_results) is list:
+                            results.extend(curr_results)
+                        elif type(curr_results) is dict:
+                            results |= (curr_results)
+                        else:
+                            print("Can't handle type " + str(type(curr_results)))
+                except:
+                    error = 0 # stub
 
     # Option to turn unnamed list into dict in case of undistinguishable information, configure in query generator
     if query_info["name"] is not None:
@@ -226,7 +222,7 @@ async def urlib_request_worker(queue, session, results_p, pbar, response_handler
 
 async def handle_queries(queries, response_handler, tqdm_desc=None):
 
-    N_MAX_WORKERS = 2000
+    N_MAX_WORKERS = 200
 
     if len(queries) <= N_MAX_WORKERS:
         coroutines = [send_urlib_request_async(query_info, response_handler) for query_info in queries]
@@ -338,6 +334,53 @@ def save_page(page):
         with open(filename, "+w") as file:
             file.write(content)
 
+# Getting plaintext wiki article pages
+
+def get_plaintext_wiki_data_query(title):
+    baseurl = "https://en.wikipedia.org/w/api.php?"
+    action = "action=query"
+    title = "titles=" + urllib.parse.quote_plus(title)
+    content = "prop=extracts"
+    exlimit = "exlimit=1"
+    explaintext = "explaintext=1"
+    dataformat ="format=json"
+
+    query = "{}{}&{}&{}&{}&{}&{}".format(baseurl, action, content, exlimit, explaintext, dataformat, title)
+
+    query_info = {"query": query, "name": None}
+
+    return query_info
+
+# Save pages to disk
+def write_file_to_folder(filepath, content):
+    # filepath = filepath.replace("/", '-')
+    # create directories if they do not exist
+    if not os.path.exists(os.path.dirname(filepath)):
+        try:
+            os.makedirs(os.path.dirname(filepath))
+        except OSError as exc: # Guard against race condition
+            if exc.errno != errno.EEXIST:
+                raise
+
+    with open(filepath, "+w") as file:
+        file.write(content)
+
+def save_talk_page(page):
+    if "revisions" in page:
+        content = page["revisions"][0]["slots"]["main"]["*"]  # * from rvslots
+        title = page["title"]
+
+        filepath = "./page_contents/" + title +".txt"
+        write_file_to_folder(filepath, content)
+
+def save_article_plaintext(page):
+    title = page["title"]
+    content = page["extract"]
+
+    filepath = "./article_pages_plaintext/" + title +".txt"
+
+    write_file_to_folder(filepath, content)
+
 # Scraper
 
 async def scrape_wiki(category_titles, verbose=True):
@@ -375,13 +418,9 @@ async def scrape_wiki(category_titles, verbose=True):
         parse_results = [parse_talk_page(page_content) for key, page_content in sublist.items() if type(sublist) == dict]
         talk_data += parse_results
 
-    ##########
-
     # Save talk page Data
     for sublist in tqdm(talk_pages, desc="Writing talk page batches to disk", mininterval=0.5):
-        [save_page(page_content) for _, page_content in sublist.items()]
-
-    ##########
+        [save_talk_page(page_content) for _, page_content in sublist.items()]
 
     ## Article pages
     article_page_titles = [title.replace("Talk:", "") for title in talk_titles]
@@ -397,7 +436,20 @@ async def scrape_wiki(category_titles, verbose=True):
         parse_results = [parse_article_page(page_content) for key, page_content in sublist.items() if type(sublist) == dict]
         article_data += parse_results
 
+    #### Retrieve and store plaintext wiki pages
+    # Retrieve plaintext wiki pages for sentiment analysis
+    wiki_plaintext_queries = [get_plaintext_wiki_data_query(title) for title in article_page_titles]
+    # Send requests
+    wiki_plaintext_pages = await handle_queries(wiki_plaintext_queries, 
+                                      response_handler=handle_wiki_data_return, 
+                                      tqdm_desc="Fetching " + str(len(article_page_titles)) + " plaintext wiki pages")
+    
+    # Parse and save plaintext wiki pages
+    for sublist in tqdm(wiki_plaintext_pages, desc="Parsing and saving plaintext wiki page batches", mininterval=0.5):
+        [save_article_plaintext(page_content) for _,page_content in sublist.items()]
+
     ## Revisions
+    print("getting revisions")
     # Get revisions
     revision_queries = [get_wiki_page_revisions_query(title) for title in article_page_titles]
     # Send requests
@@ -420,6 +472,7 @@ async def scrape_wiki(category_titles, verbose=True):
     # user_edit_counts = {user["editcount"] if "editcount" in user else 0 for user in users}
 
     # Graph
+    print("creating graph")
     page_graph = nx.DiGraph()
 
     for talk_page_title, wiki_page_title in zip(talk_titles, article_page_titles):
