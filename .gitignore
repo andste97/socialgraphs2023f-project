@@ -5,6 +5,7 @@ project/page_contents
 project/toxic_comment_train_data
 project/article_pages_plaintext
 parsing_worker_results.pkl
+*.graphml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

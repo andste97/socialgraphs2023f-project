@@ -300,7 +300,11 @@ def parse_article_page(page):
         # Normalize whitespace
         content = re.sub(r'[\n\t\ ]+', ' ', content)
 
-        return {"origin_title": title}
+        # Retreive links to other articles
+        links = re.findall('\[([^/\]\[\|]+)[\]\|]', content) # Previous: '\[([^\]\[\|:]+)[\]\|]'
+        filtered_links = np.unique(links)
+
+        return {"origin_title": title, "article_links": filtered_links}
     else:
         return None
 
@@ -449,7 +453,6 @@ async def scrape_wiki(category_titles, verbose=True):
         [save_article_plaintext(page_content) for _,page_content in sublist.items()]
 
     ## Revisions
-    print("getting revisions")
     # Get revisions
     revision_queries = [get_wiki_page_revisions_query(title) for title in article_page_titles]
     # Send requests
@@ -461,7 +464,7 @@ async def scrape_wiki(category_titles, verbose=True):
     user_list.extend([link for page_data in talk_data for link in page_data["user_links"]])
     users_unique = np.unique(user_list)
 
-    ## Users
+    ## Users  # unused because overkill
     user_edit_counts = []
     # split_user_list = list(chunks(users_unique, wiki_api_page_request_limit))
     # # Get revisions
@@ -472,27 +475,34 @@ async def scrape_wiki(category_titles, verbose=True):
     # user_edit_counts = {user["editcount"] if "editcount" in user else 0 for user in users}
 
     # Graph
-    print("creating graph")
+    print("Creating graph")
     page_graph = nx.DiGraph()
 
-    for talk_page_title, wiki_page_title in zip(talk_titles, article_page_titles):
-        page_graph.add_node(talk_page_title, page_class="talk")
-        page_graph.add_node(wiki_page_title, page_class="page")
-        page_graph.add_edge(talk_page_title, wiki_page_title)
+    for wiki_page_title in article_page_titles:
+        page_graph.add_node(wiki_page_title, page_class="article")
 
 
     count = 0
     # Add User: links to graph
-    for page_data in tqdm(talk_data, desc="Creating graph"):
+    for page_data in tqdm(talk_data, desc="Linking users"):
         if page_data is not None:
-            if page_data["origin_title"] in page_graph:
+            if page_data["origin_title"].replace("Talk:", "") in page_graph:
                 for link in page_data["user_links"]:
                     if link not in page_graph:
                         page_graph.add_node(link, page_class="user")
-                    page_graph.add_edge(link, page_data["origin_title"])
+                    page_graph.add_edge(link, page_data["origin_title"].replace("Talk:", ""))
                     count += 1
             #else:
             #    print(origin_title) # Talk:HIV for some reason
+
+    # Add User: links to graph
+    for page_data in tqdm(article_data, desc="Linking articles"):
+        if page_data is not None:
+            if page_data["origin_title"] in page_graph:
+                for link in page_data["article_links"]:
+                    if link in page_graph:
+                        page_graph.add_edge(link, page_data["origin_title"])
+                        count += 1
 
     print("Total edges: " + str(count))
 
