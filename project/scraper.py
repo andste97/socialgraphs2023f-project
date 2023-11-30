@@ -499,3 +499,62 @@ async def scrape_wiki(category_titles, verbose=True):
     infos = {"titles": talk_titles, "archive_titles": archive_titles, "user_edit_counts": user_edit_counts, "revision_dict": revision_dict}
 
     return page_graph, infos
+
+
+
+def get_article_category_query(titles):
+    # Can handle up to 50 titles
+    if isinstance(titles, list):
+        titlestring = "|".join(titles)
+    else:
+        titlestring = titles
+
+    baseurl = "https://en.wikipedia.org/w/api.php?"
+    action = "action=query"
+    content = "prop=categories"
+    dataformat = "format=json"
+    limit = "cllimit=500"
+    safe_title = "titles=" + urllib.parse.quote_plus(titlestring)
+    query = "{}{}&{}&{}&{}&{}".format(baseurl, action, content, safe_title, dataformat, limit)
+
+    query_info = {"query": query, "name": None}
+
+    return query_info
+
+def parse_category_page(page_content):
+    # Does page exist?
+    page_title = page_content["title"]
+    if(page_content.get("categories")):
+        categories = [category["title"].replace("Category:", "") for category in page_content["categories"]]
+        return {page_title: categories}
+    
+    return {}
+
+
+async def get_wikipedia_article_categories(category_titles):
+    # Constants
+    wiki_api_page_request_limit = 10
+    namespace_id_talk = 1
+
+    ## Talk: pages
+    # Get pages in category
+    category_queries = [get_category_pages_query(category_title, namespace_id_talk) for category_title in category_titles]
+    # Send requests
+    pages = await handle_queries(category_queries, response_handler=handle_category_pages_return, tqdm_desc="Fetching " + str(len(category_titles)) + " categories")
+    # Handle results
+    talk_titles = [r["title"] for page in pages for r in page]
+    article_page_titles = [title.replace("Talk:", "") for title in talk_titles]
+    split_article_titles_list = list(chunks(article_page_titles, wiki_api_page_request_limit))
+    article_category_queries = [get_article_category_query(titles) for titles in split_article_titles_list]
+
+    article_page_categories = await handle_queries(article_category_queries, response_handler=handle_wiki_data_return, tqdm_desc="Fetching " + str(len(article_page_titles)) + " article pages")
+
+    page_title_categories = {}
+    for sublist in tqdm(article_page_categories, desc="Parsing talk page batches", mininterval=0.5):
+        parse_results = [parse_category_page(page_content) for key, page_content in sublist.items() if type(sublist) == dict]
+        if len(parse_results) > 0:
+            [page_title_categories.update(result) for result in parse_results]
+
+    return page_title_categories
+
+
